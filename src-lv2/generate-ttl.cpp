@@ -16,12 +16,15 @@
  */
 
 #include "AirwinRegistry.h"
+#include "Lv2ParameterAnalysis.h"
+#include "Lv2StringUtils.h"
 
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <set>
 #include <cctype>
+#include <algorithm>
 #include <memory>
 
 #ifndef AW_LV2_VERSION_MAJOR
@@ -101,9 +104,7 @@ static std::string ttlEscape(const std::string& s)
 // Returns an empty string if no unit should be emitted.
 static std::string paramUnitToTtl(const std::string& label)
 {
-    std::string s = label;
-    while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(s.begin());
-    while (!s.empty() && std::isspace((unsigned char)s.back()))  s.pop_back();
+    std::string s = trimWhitespace(label);
     if (s.empty()) return "";
 
     std::string sl = s;
@@ -181,6 +182,7 @@ static bool writePluginTtl(const std::string& bundleDir,
     f << "@prefix doap:  <http://usefulinc.com/ns/doap#> .\n";
     f << "@prefix foaf:  <http://xmlns.com/foaf/0.1/> .\n";
     f << "@prefix lv2:   <http://lv2plug.in/ns/lv2core#> .\n";
+    f << "@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n";
     f << "@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .\n";
     f << "@prefix units: <http://lv2plug.in/ns/extensions/units#> .\n\n";
 
@@ -282,23 +284,35 @@ static bool writePluginTtl(const std::string& bundleDir,
             std::string sym = uniqueSymbol(
                 makeSymbol(pname.empty() ? "ctrl" : pname));
 
-            float def = fx->getParameter(p);
+            const Lv2NumericDisplayDomain numericDomain = analyzeNumericDisplayDomain(fx.get(), p);
 
             beginPort();
             f << "        a lv2:ControlPort, lv2:InputPort ;\n";
             f << "        lv2:index " << (4 + p) << " ;\n";
             f << "        lv2:symbol \"" << sym << "\" ;\n";
             f << "        lv2:name \"" << ttlEscape(pname) << "\" ;\n";
-            f << "        lv2:default " << def << " ;\n";
-            f << "        lv2:minimum 0.0 ;\n";
-            if (!unitTtl.empty())
+            f << "        lv2:default " << numericDomain.defaultValue << " ;\n";
+            f << "        lv2:minimum " << numericDomain.minimum << " ;\n";
+            if (numericDomain.isIntegerEnumeration)
             {
-                f << "        lv2:maximum 1.0 ;\n";
+                f << "        lv2:maximum " << numericDomain.maximum << " ;\n";
+                f << "        lv2:portProperty lv2:integer, lv2:enumeration ;\n";
+                for (size_t i = 0; i < numericDomain.integerScalePoints.size(); ++i)
+                {
+                    f << "        lv2:scalePoint [ rdfs:label \""
+                      << ttlEscape(numericDomain.integerScalePoints[i].first)
+                      << "\" ; rdf:value " << numericDomain.integerScalePoints[i].second << " ]";
+                    f << (i + 1 < numericDomain.integerScalePoints.size() ? " ;\n" : "\n");
+                }
+            }
+            else if (!unitTtl.empty())
+            {
+                f << "        lv2:maximum " << numericDomain.maximum << " ;\n";
                 f << "        " << unitTtl << "\n";
             }
             else
             {
-                f << "        lv2:maximum 1.0\n";
+                f << "        lv2:maximum " << numericDomain.maximum << "\n";
             }
         }
 

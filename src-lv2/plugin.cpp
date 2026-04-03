@@ -17,12 +17,15 @@
 
 #include <lv2/core/lv2.h>
 #include "AirwinRegistry.h"
+#include "Lv2ParameterAnalysis.h"
+#include "Lv2StringUtils.h"
 
 #include <string>
 #include <vector>
 #include <memory>
 #include <mutex>
 #include <cstdint>
+#include <cstdio>
 
 // ---------------------------------------------------------------------------
 // Port index constants
@@ -78,6 +81,11 @@ struct AwDescriptorEntry {
 // Per-instance runtime data
 // ---------------------------------------------------------------------------
 struct AwLv2Instance {
+    enum class ParamMapMode {
+        Normalized,
+        TextToValue
+    };
+
     int    registryIndex;
     int    nParams;
     std::unique_ptr<AirwinConsolidatedBase> effect;
@@ -90,6 +98,7 @@ struct AwLv2Instance {
 
     // One pointer per control parameter; null means not yet connected
     std::vector<float*> ctrlPorts;
+    std::vector<ParamMapMode> paramMapModes;
 };
 
 // ---------------------------------------------------------------------------
@@ -153,6 +162,13 @@ static LV2_Handle aw_instantiate(
     inst->effect        = reg.generator();  // <-- Create Galactic, or Baxandall, or...
     inst->effect->setSampleRate(static_cast<float>(sample_rate));
     inst->ctrlPorts.assign(reg.nParams, nullptr);
+    inst->paramMapModes.assign(reg.nParams, AwLv2Instance::ParamMapMode::Normalized);
+
+    for (int p = 0; p < reg.nParams; ++p)
+    {
+        if (analyzeNumericDisplayDomain(inst->effect.get(), p).needsTextToValueMapping())
+            inst->paramMapModes[p] = AwLv2Instance::ParamMapMode::TextToValue;
+    }
 
     // Each handle is independent. If the host loads Galactic AND Baxandall
     // at the same time, they'll each get their own handle with their own effect instance.
@@ -189,7 +205,27 @@ static void aw_run(LV2_Handle handle, uint32_t sample_count)
     for (int p = 0; p < inst->nParams; ++p)
     {
         if (inst->ctrlPorts[p])
-            inst->effect->setParameter(p, *inst->ctrlPorts[p]);
+        {
+            const float portValue = *inst->ctrlPorts[p];
+            switch (inst->paramMapModes[p])
+            {
+                case AwLv2Instance::ParamMapMode::TextToValue:
+                {
+                    char textBuf[64] = {0};
+                    std::snprintf(textBuf, sizeof(textBuf), "%.9g", static_cast<double>(portValue));
+                    float converted = portValue;
+                    if (inst->effect->parameterTextToValue(p, textBuf, converted))
+                        inst->effect->setParameter(p, converted);
+                    else
+                        inst->effect->setParameter(p, portValue);
+                    break;
+                }
+                case AwLv2Instance::ParamMapMode::Normalized:
+                default:
+                    inst->effect->setParameter(p, portValue);
+                    break;
+            }
+        }
     }
 
     // Process audio using instance's effect object
