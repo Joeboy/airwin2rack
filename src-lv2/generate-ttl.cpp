@@ -97,6 +97,32 @@ static std::string ttlEscape(const std::string& s)
     return out;
 }
 
+// Map a VST parameter label string to an LV2 units Turtle fragment.
+// Returns an empty string if no unit should be emitted.
+static std::string paramUnitToTtl(const std::string& label)
+{
+    std::string s = label;
+    while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(s.begin());
+    while (!s.empty() && std::isspace((unsigned char)s.back()))  s.pop_back();
+    if (s.empty()) return "";
+
+    std::string sl = s;
+    for (char& c : sl) c = (char)std::tolower((unsigned char)c);
+
+    // Standard LV2 units ontology mappings
+    if (sl == "db")                  return "units:unit units:db";
+    if (sl == "hz")                  return "units:unit units:hz";
+    if (sl == "khz")                 return "units:unit units:khz";
+    if (sl == "%")                   return "units:unit units:pc";
+    if (sl == "ms")                  return "units:unit units:ms";
+    if (sl == "sec" || sl == "s")    return "units:unit units:s";
+    if (sl == "bpm")                 return "units:unit units:bpm";
+    if (sl == "semi")                return "units:unit units:semitone12TET";
+
+    // Unknown unit: emit a custom units:Unit with a human-readable label
+    return "units:unit [ a units:Unit ; rdfs:label \"" + ttlEscape(s) + "\" ]";
+}
+
 // Map an Airwindows category string to a suitable lv2: plugin type URI.
 static const char* categoryToLv2Type(const std::string& cat)
 {
@@ -152,10 +178,11 @@ static bool writePluginTtl(const std::string& bundleDir,
     std::ofstream f(bundleDir + "airwindows-individual.ttl");
     if (!f) { std::cerr << "Cannot write airwindows-individual.ttl\n"; return false; }
 
-    f << "@prefix doap: <http://usefulinc.com/ns/doap#> .\n";
-    f << "@prefix foaf: <http://xmlns.com/foaf/0.1/> .\n";
-    f << "@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .\n";
-    f << "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\n";
+    f << "@prefix doap:  <http://usefulinc.com/ns/doap#> .\n";
+    f << "@prefix foaf:  <http://xmlns.com/foaf/0.1/> .\n";
+    f << "@prefix lv2:   <http://lv2plug.in/ns/lv2core#> .\n";
+    f << "@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .\n";
+    f << "@prefix units: <http://lv2plug.in/ns/extensions/units#> .\n\n";
 
     for (const auto& r : registry)
     {
@@ -247,6 +274,11 @@ static bool writePluginTtl(const std::string& bundleDir,
             fx->getParameterName(p, nameBuf);
             std::string pname(nameBuf);
 
+            char labelBuf[kVstMaxParamStrLen];
+            labelBuf[0] = '\0';
+            fx->getParameterLabel(p, labelBuf);
+            std::string unitTtl = paramUnitToTtl(labelBuf);
+
             std::string sym = uniqueSymbol(
                 makeSymbol(pname.empty() ? "ctrl" : pname));
 
@@ -259,7 +291,15 @@ static bool writePluginTtl(const std::string& bundleDir,
             f << "        lv2:name \"" << ttlEscape(pname) << "\" ;\n";
             f << "        lv2:default " << def << " ;\n";
             f << "        lv2:minimum 0.0 ;\n";
-            f << "        lv2:maximum 1.0\n";
+            if (!unitTtl.empty())
+            {
+                f << "        lv2:maximum 1.0 ;\n";
+                f << "        " << unitTtl << "\n";
+            }
+            else
+            {
+                f << "        lv2:maximum 1.0\n";
+            }
         }
 
         (void)totalPorts; // used only for the conceptual count
